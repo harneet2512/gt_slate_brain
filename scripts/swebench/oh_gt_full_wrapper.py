@@ -51,10 +51,16 @@ try:
     from groundtruth.state import Step as _BrainStep, TrajectoryView as _BrainView
     from groundtruth.brain import (
         decide as _brain_decide,
+        decide_bundle as _brain_decide_bundle,
+        decide_completeness as _brain_decide_completeness,
         decide_proactive as _brain_decide_proactive,
+        decide_wandering as _brain_decide_wandering,
         estimate as _brain_estimate,
         is_review_phase as _brain_is_review_phase,
+        render_completeness_note as _brain_completeness_note,
         render_contract_break_note as _brain_contract_note,
+        render_evidence_bundle as _brain_bundle_note,
+        render_wandering_note as _brain_wandering_note,
         verify_block as _brain_verify_block,
     )
     _BRAIN_AVAILABLE = True
@@ -63,6 +69,8 @@ except Exception:  # noqa: BLE001 — brain package optional; never break the wr
     _BrainStep = _BrainView = None  # type: ignore[assignment]
     _brain_decide = _brain_estimate = _brain_verify_block = None  # type: ignore[assignment]
     _brain_decide_proactive = _brain_is_review_phase = _brain_contract_note = None  # type: ignore[assignment]
+    _brain_decide_bundle = _brain_decide_completeness = _brain_decide_wandering = None  # type: ignore[assignment]
+    _brain_bundle_note = _brain_completeness_note = _brain_wandering_note = None  # type: ignore[assignment]
 
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -1056,6 +1064,28 @@ def _brain_handle_suppress(
                     _tel.record_reindex(True)
         except Exception as _exc:  # noqa: BLE001 — never break the agent loop
             print(f"[GT_META] brain suppress-reindex error: {_exc}", flush=True)
+
+    # WANDERING content (GT_BRAIN, authorized): the loop back-off withholds the
+    # loop noise, but at the FIRST wandering moment with VERIFIED scope we surface
+    # that scope ONCE as facts to re-anchor on (then withhold thereafter). Bounded
+    # by the fired flag — the estimate runs only until it fires once.
+    if not getattr(config, "_brain_wandering_fired", False):
+        try:
+            _wview = _BrainView(config)
+            _wstate = _brain_estimate(_wview, config.graph_db)
+            _wd = _brain_decide_wandering(_wview, _wstate, already_fired=False)
+            if _wd.fire:
+                _wnote = _brain_wandering_note(_wd.scope)
+                if _wnote:
+                    obs = append_observation(obs, _wnote)  # routes through verify_block
+                    config._brain_wandering_fired = True
+                    print(
+                        f"[GT_META] BRAIN_WANDERING scope={list(_wd.scope)[:5]} "
+                        f"ac={config.action_count}",
+                        flush=True,
+                    )
+        except Exception as _wexc:  # noqa: BLE001 — never break the agent loop
+            print(f"[GT_META] brain wandering error: {_wexc}", flush=True)
     config.last_visible_observation = obs
     return obs
 
@@ -1088,28 +1118,51 @@ def _brain_capture_pre_edit_sigs(config: "GTRuntimeConfig", path: str) -> None:
 
 
 def _brain_maybe_fire_proactive(config: "GTRuntimeConfig", obs: Any) -> Any:
-    """Stage 5 proactive rule: at the edit→review transition, if a VERIFIED contract
-    break exists (signature/return changed AND ≥1 uncovered verified caller), surface
-    those callers ONCE, through the delivery gate. Cheap trajectory gate first so the
-    graph estimate runs at most one moment. GT_BRAIN-gated by the caller."""
-    if getattr(config, "_brain_proactive_fired", False):
+    """Proactive rules (GT_BRAIN-gated, verified-content-only, diagnostic framing):
+
+    - **§4 BUNDLE at first edit** (FLIP_AUDIT §4 — the highest-probability lever):
+      uncovered verified callers + visible-test assertions for the symbol the agent
+      just edited. Provenance + relevance gated; NOT gated on a signature change
+      (the redirect — the sig-change gate would have silenced GT on weasyprint).
+    - **COMPLETENESS at review/submit**: verified uncovered call-scope + historical
+      co-change partners not in the diff.
+
+    Each fires at most once; the graph estimate runs only while a rule is unfired
+    (so at most a bounded number of cheap SQL passes). Every block routes through
+    ``append_observation`` -> ``verify_block``."""
+    bundle_done = getattr(config, "_brain_proactive_fired", False)
+    completeness_done = getattr(config, "_brain_completeness_fired", False)
+    if bundle_done and completeness_done:
         return obs
     try:
         view = _BrainView(config)
-        if not _brain_is_review_phase(view):  # cheap, trajectory-only — avoids the graph query
-            return obs
         state = _brain_estimate(view, config.graph_db, signature_snapshots=config._sig_snapshots)
-        dec = _brain_decide_proactive(view, state, already_fired=config._brain_proactive_fired)
-        if dec.fire:
-            note = _brain_contract_note(dec.callers)
-            if note:
-                obs = append_observation(obs, note)  # routes through verify_block
-                config._brain_proactive_fired = True
-                print(
-                    f"[GT_META] BRAIN_PROACTIVE contract_break callers={list(dec.callers)[:5]} "
-                    f"ac={config.action_count}",
-                    flush=True,
-                )
+
+        if not bundle_done:
+            bd = _brain_decide_bundle(view, state, already_fired=bundle_done)
+            if bd.fire:
+                note = _brain_bundle_note(bd.callers, bd.tests)
+                if note:
+                    obs = append_observation(obs, note)  # routes through verify_block
+                    config._brain_proactive_fired = True
+                    print(
+                        f"[GT_META] BRAIN_BUNDLE callers={list(bd.callers)[:5]} "
+                        f"tests={len(bd.tests)} ac={config.action_count}",
+                        flush=True,
+                    )
+
+        if not completeness_done:
+            cd = _brain_decide_completeness(view, state, already_fired=completeness_done)
+            if cd.fire:
+                note = _brain_completeness_note(cd.uncovered_scope, cd.co_change)
+                if note:
+                    obs = append_observation(obs, note)
+                    config._brain_completeness_fired = True
+                    print(
+                        f"[GT_META] BRAIN_COMPLETENESS scope={list(cd.uncovered_scope)[:5]} "
+                        f"co_change={len(cd.co_change)} ac={config.action_count}",
+                        flush=True,
+                    )
     except Exception as exc:  # noqa: BLE001 — never break the agent loop
         print(f"[GT_META] brain proactive error: {exc}", flush=True)
     return obs

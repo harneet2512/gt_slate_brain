@@ -64,6 +64,12 @@ class MetricState:
     graph_available: bool
     required_scope: Optional[tuple[str, ...]] = None  # the deterministic required set (audit)
 
+    # §4 bundle: VERIFIED test->target assertions covering an edited symbol — the
+    # deterministic proxy for "what correct behavior is". None before the first
+    # edit or when the assertions table is absent. Each entry: (test_file,
+    # test_name, expression). Gated on a VERIFIED link (assertions.target_node_id>0).
+    visible_tests: Optional[tuple[tuple[str, str, str], ...]] = None
+
 
 GraphArg = Union[str, sqlite3.Connection, None]
 
@@ -176,6 +182,38 @@ def _co_change_partners(conn: sqlite3.Connection, edited: frozenset[str]) -> dic
     return out
 
 
+def _visible_tests(conn: sqlite3.Connection, edited: frozenset[str]) -> list[tuple[str, str, str]]:
+    """VERIFIED test->target assertions covering a symbol in an edited file.
+
+    Restricted to ``assertions.target_node_id > 0`` — a RESOLVED (verified) link
+    from a test to the edited symbol, never a 0/unresolved guess. Returns
+    ``(test_file, test_name, expression)`` tuples — the visible test that defines
+    correct behavior for the symbol the agent just edited. Empty when the
+    assertions table is absent or no verified link targets an edited file.
+    """
+    if not edited or not _table_exists(conn, "assertions"):
+        return []
+    ph = ",".join("?" for _ in edited)
+    try:
+        rows = conn.execute(
+            f"SELECT DISTINCT tnode.file_path, tnode.name, a.expression "
+            f"FROM assertions a "
+            f"JOIN nodes tgt   ON a.target_node_id = tgt.id "
+            f"JOIN nodes tnode ON a.test_node_id   = tnode.id "
+            f"WHERE a.target_node_id > 0 AND tgt.file_path IN ({ph}) "
+            f"ORDER BY tnode.file_path, tnode.name",
+            (*edited,),
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    out: list[tuple[str, str, str]] = []
+    for r in rows:
+        tf, tn, expr = (r[0] or ""), (r[1] or ""), (r[2] or "")
+        if tf and tn:
+            out.append((tf, tn, expr))
+    return out
+
+
 def _signature_changed(
     snapshots: dict[tuple[str, str], tuple[str, str]],
     current: dict[tuple[str, str], tuple[str, str]],
@@ -231,6 +269,7 @@ def estimate(
     contract_break_risk: Optional[bool] = None
     co_change_gap: Optional[tuple[tuple[str, int], ...]] = None
     required_scope: Optional[tuple[str, ...]] = None
+    visible_tests: Optional[tuple[tuple[str, str, str], ...]] = None
 
     try:
         if conn is not None and edited:
@@ -261,6 +300,10 @@ def estimate(
                 co_change_gap = tuple(
                     sorted(partners.items(), key=lambda kv: (-kv[1], kv[0]))
                 )
+
+            # §4 bundle: verified visible-test assertions covering the edited symbol.
+            if _table_exists(conn, "assertions"):
+                visible_tests = tuple(_visible_tests(conn, edited))
     finally:
         if owned and conn is not None:
             try:
@@ -278,4 +321,5 @@ def estimate(
         co_change_gap=co_change_gap,
         graph_available=graph_available,
         required_scope=required_scope,
+        visible_tests=visible_tests,
     )

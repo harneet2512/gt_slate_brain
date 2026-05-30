@@ -51,6 +51,16 @@ class ProactiveDecision:
     reason: str = ""
 
 
+@dataclass(frozen=True)
+class BundleDecision:
+    """§4 redirected proactive rule output: the verified flip-content bundle."""
+
+    fire: bool
+    callers: tuple[str, ...] = ()
+    tests: tuple[tuple[str, str, str], ...] = ()
+    reason: str = ""
+
+
 def is_review_phase(view: Any, *, review_window: int = _REVIEW_WINDOW) -> bool:
     """True once the agent has edited ≥1 source file and then taken ≥review_window
     actions without another source edit (the actionable edit→review moment). Cheap,
@@ -78,6 +88,86 @@ def decide_proactive(view: Any, state: Any, *, already_fired: bool = False,
     if state.contract_break_risk:
         return ProactiveDecision(True, tuple(state.uncovered_callers or ()), "contract_break")
     return ProactiveDecision(False, reason="no_break")
+
+
+def decide_bundle(view: Any, state: Any, *, already_fired: bool = False) -> BundleDecision:
+    """§4 REDIRECTED proactive rule (FLIP_AUDIT §4) — the highest-probability flip lever.
+
+    Fire ONCE, at the FIRST EDIT, surfacing the VERIFIED flip-content bundle for the
+    symbol the agent just edited: 1-hop uncovered callers + the visible-test
+    assertions that define correct behavior. Gated by **provenance + relevance**, NOT
+    by a signature change — the sig-change gate (decide_proactive) would have stayed
+    silent on weasyprint, GT's only real flip (DOC_OF_HONOR:1497). Relevance = the
+    agent's own edit (it chose the symbol). Non-dampening: every item is verified
+    (callers via deterministic edges, tests via assertions.target_node_id>0), so it
+    confirms a correct fix and cannot misdirect (The Distracting Effect, 2025). Silent
+    when no verified content exists (Geifman & El-Yaniv, 2017).
+    """
+    if already_fired:
+        return BundleDecision(False, reason="already_fired")
+    if not view.edited_files:
+        return BundleDecision(False, reason="no_edit")
+    callers = tuple(state.uncovered_callers or ())
+    tests = tuple(state.visible_tests or ())
+    if not callers and not tests:
+        return BundleDecision(False, reason="no_verified_content")
+    return BundleDecision(True, callers, tests, "bundle_at_first_edit")
+
+
+@dataclass(frozen=True)
+class CompletenessDecision:
+    fire: bool
+    uncovered_scope: tuple[str, ...] = ()
+    co_change: tuple[tuple[str, int], ...] = ()
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class WanderingDecision:
+    fire: bool
+    scope: tuple[str, ...] = ()
+    reason: str = ""
+
+
+def decide_completeness(view: Any, state: Any, *, already_fired: bool = False,
+                        review_window: int = _REVIEW_WINDOW) -> CompletenessDecision:
+    """Completeness-without-break (deferred in FLIP_AUDIT §3, now authorized): at the
+    review/submit moment, surface the VERIFIED scope the diff has not covered —
+    required-scope files not edited + historical co-change partners. Diagnostic only
+    ("confirm"), once. Fires only on verified scope (required_scope is deterministic-
+    edge-derived; co_change is the cochanges table), so it cannot misdirect a correct,
+    internally-complete fix beyond a confirmatory prompt."""
+    if already_fired:
+        return CompletenessDecision(False, reason="already_fired")
+    submitting = bool(getattr(state, "about_to_submit", False))
+    if not (submitting or is_review_phase(view, review_window=review_window)):
+        return CompletenessDecision(False, reason="not_review_or_submit")
+    edited = set(view.edited_files)
+    uncovered = tuple(f for f in (state.required_scope or ()) if f not in edited)
+    co = tuple(state.co_change_gap or ())
+    if not uncovered and not co:
+        return CompletenessDecision(False, reason="complete")
+    return CompletenessDecision(True, uncovered, co, "incomplete_scope")
+
+
+def decide_wandering(view: Any, state: Any, *, already_fired: bool = False) -> WanderingDecision:
+    """Wandering (deferred in FLIP_AUDIT, now authorized): when the agent is wandering
+    (no_progress beyond the task's OWN cadence, same dynamic cutoff as the loop
+    back-off), surface the VERIFIED call-scope of its edits as FACTS to re-anchor on —
+    never a 'go look here' directive. Fire once. Silent when no verified scope exists
+    (then the loop back-off's withholding is the only action — no steering on weak
+    signal). This is the content complement to the defensive suppression."""
+    if already_fired:
+        return WanderingDecision(False, reason="already_fired")
+    npw = getattr(state, "no_progress_window", None)
+    cutoff = no_progress_cutoff(tuple(view.new_file_iters))
+    if npw is None or cutoff is None or npw <= cutoff:
+        return WanderingDecision(False, reason="not_wandering")
+    seen = set(view.edited_files) | set(view.viewed_files)
+    scope = tuple(f for f in (state.required_scope or ()) if f not in seen)
+    if not scope:
+        return WanderingDecision(False, reason="no_verified_scope")
+    return WanderingDecision(True, scope, "wandering_with_scope")
 
 
 def no_progress_cutoff(new_file_iters: tuple[int, ...]) -> Optional[int]:

@@ -16,14 +16,25 @@ reusing ``groundtruth.pretask.curation_map`` — the single source of truth for
 """
 from __future__ import annotations
 
-from groundtruth.brain.content import render_contract_break_note
+from groundtruth.brain.content import (
+    render_completeness_note,
+    render_contract_break_note,
+    render_evidence_bundle,
+    render_wandering_note,
+)
 from groundtruth.brain.delivery import verify_block
 from groundtruth.brain.estimator import MetricState, estimate
 from groundtruth.brain.policy import (
+    BundleDecision,
+    CompletenessDecision,
     Decision,
     ProactiveDecision,
+    WanderingDecision,
     decide,
+    decide_bundle,
+    decide_completeness,
     decide_proactive,
+    decide_wandering,
     is_review_phase,
     no_progress_cutoff,
 )
@@ -33,10 +44,18 @@ __all__ = [
     "estimate",
     "Decision",
     "ProactiveDecision",
+    "BundleDecision",
+    "CompletenessDecision",
+    "WanderingDecision",
     "decide",
     "decide_proactive",
+    "decide_bundle",
+    "decide_completeness",
+    "decide_wandering",
     "is_review_phase",
     "no_progress_cutoff",
     "render_contract_break_note",
-    "verify_block",
+    "render_evidence_bundle",
+    "render_completeness_note",
+    "render_wandering_note",
 ]
