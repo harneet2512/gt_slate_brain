@@ -66,6 +66,7 @@ try:
     )
     from groundtruth.brain.envelope import (
         EvidenceEnvelope as _BrainEnvelope,
+        derive_deterministic as _brain_derive_det,
         render_envelope as _brain_render_envelope,
     )
     _BRAIN_AVAILABLE = True
@@ -77,7 +78,7 @@ except Exception:  # noqa: BLE001 — brain package optional; never break the wr
     _brain_decide_bundle = _brain_decide_completeness = _brain_decide_wandering = None  # type: ignore[assignment]
     _brain_bundle_note = _brain_completeness_note = _brain_wandering_note = None  # type: ignore[assignment]
     _brain_decide_delivery = None  # type: ignore[assignment]
-    _BrainEnvelope = _brain_render_envelope = None  # type: ignore[assignment]
+    _BrainEnvelope = _brain_render_envelope = _brain_derive_det = None  # type: ignore[assignment]
 
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -143,6 +144,22 @@ def _extract_grep_symbol(cmd_text: str) -> str | None:
             return None
         return sym
     return None
+
+
+def _grep_render(sym: str, caller_lines: str, all_verified: bool) -> str:
+    """Stage 6 (b): render grep-intercept callers via an EvidenceEnvelope so the
+    Brain owns TRUTH. The flat caller query filters on confidence>=0.6, NOT on
+    provenance, so it can include name_match edges; when the shown callers are not
+    ALL verified the envelope renders an explicit (unverified) hint rather than a
+    'Callers of X' fact (name_match is never a fact). Legacy plain text with
+    GT_BRAIN off."""
+    body = f"[GT] Callers of '{sym}':\n{caller_lines}"
+    if _GT_BRAIN and _BRAIN_AVAILABLE and _BrainEnvelope is not None:
+        rm = "verified_unique" if all_verified else "name_match"
+        return "\n" + _brain_render_envelope(
+            _BrainEnvelope(layer="grep", kind="callers", body=body, resolution_method=rm)
+        )
+    return "\n" + body
 
 
 SOURCE_EXTS = (
@@ -3939,7 +3956,8 @@ def wrap_runtime_run_action(runtime: Any, config: GTRuntimeConfig | None = None)
                             _grep_conn.row_factory = _sq_grep.Row
                             _grep_conn.execute("PRAGMA busy_timeout=3000")
                             _grep_callers = _grep_conn.execute(
-                                "SELECT DISTINCT nsrc.file_path, e.source_line "
+                                "SELECT DISTINCT nsrc.file_path, e.source_line, "
+                                "COALESCE(e.resolution_method,'') AS resolution_method "
                                 "FROM edges e "
                                 "JOIN nodes nt ON e.target_id = nt.id "
                                 "JOIN nodes nsrc ON e.source_id = nsrc.id "
@@ -3949,6 +3967,12 @@ def wrap_runtime_run_action(runtime: Any, config: GTRuntimeConfig | None = None)
                                 f"LIMIT {_gi_limit}",
                                 (_grep_sym,),
                             ).fetchall()
+                            # Stage 6 (b): are ALL shown callers from a VERIFIED edge?
+                            # If any is name_match the block renders (unverified).
+                            _grep_all_verified = bool(_grep_callers) and (
+                                _brain_derive_det is None
+                                or all(_brain_derive_det(c["resolution_method"]) for c in _grep_callers)
+                            )
                             _grep_total = 0
                             if _gi_detail == "count_only":
                                 _grep_total = _grep_conn.execute(
@@ -3985,7 +4009,7 @@ def wrap_runtime_run_action(runtime: Any, config: GTRuntimeConfig | None = None)
                                         else:
                                             _caller_line_parts.append(f"  {c['file_path']}:{c['source_line']}")
                                 _caller_lines = "\n".join(_caller_line_parts)
-                                _grep_evidence = f"\n[GT] Callers of '{_grep_sym}':\n{_caller_lines}"
+                                _grep_evidence = _grep_render(_grep_sym, _caller_lines, _grep_all_verified)
                                 obs = append_observation(obs, _grep_evidence, layer="grep", config=config)
                                 config._grep_intercept_count += 1
                                 print(
@@ -4003,7 +4027,8 @@ def wrap_runtime_run_action(runtime: Any, config: GTRuntimeConfig | None = None)
                         import json as _j_grep
                         _grep_sym_esc = _grep_sym.replace("'", "''")
                         _grep_sql = (
-                            f"SELECT DISTINCT nsrc.file_path, e.source_line "
+                            f"SELECT DISTINCT nsrc.file_path, e.source_line, "
+                            f"COALESCE(e.resolution_method,'') "
                             f"FROM edges e "
                             f"JOIN nodes nt ON e.target_id = nt.id "
                             f"JOIN nodes nsrc ON e.source_id = nsrc.id "
@@ -4015,6 +4040,13 @@ def wrap_runtime_run_action(runtime: Any, config: GTRuntimeConfig | None = None)
                         _grep_raw = _container_query(orig_run_action, config.graph_db, _grep_sql)
                         _grep_rows = _j_grep.loads(_grep_raw)
                         if _grep_rows:
+                            # Stage 6 (b): verified iff EVERY shown caller's edge is a
+                            # deterministic resolution_method (3rd column); else (unverified).
+                            def _row_rm(_r):
+                                return _r[2] if isinstance(_r, (list, tuple)) and len(_r) > 2 else ""
+                            _grep_all_verified_cq = _brain_derive_det is None or all(
+                                _brain_derive_det(_row_rm(_row)) for _row in _grep_rows
+                            )
                             _caller_line_parts_cq: list[str] = []
                             if _gi_detail == "count_only":
                                 _caller_line_parts_cq.append(f"  {len(_grep_rows)}+ caller(s) across codebase")
@@ -4024,7 +4056,7 @@ def wrap_runtime_run_action(runtime: Any, config: GTRuntimeConfig | None = None)
                                     _sl = _row[1] if isinstance(_row, (list, tuple)) and len(_row) > 1 else 0
                                     _caller_line_parts_cq.append(f"  {_fp}:{_sl}")
                             _caller_lines_cq = "\n".join(_caller_line_parts_cq)
-                            _grep_evidence = f"\n[GT] Callers of '{_grep_sym}':\n{_caller_lines_cq}"
+                            _grep_evidence = _grep_render(_grep_sym, _caller_lines_cq, _grep_all_verified_cq)
                             obs = append_observation(obs, _grep_evidence, layer="grep", config=config)
                             config._grep_intercept_count += 1
                             print(
