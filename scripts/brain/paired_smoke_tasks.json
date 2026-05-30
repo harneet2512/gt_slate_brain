@@ -1,0 +1,16 @@
+{
+  "_README": "TEMPLATE — replace every <...> with the EXACT SWE-bench-Live instance_id. Do not guess; confirm against the dataset or canary_3arm.yml/swebench_30task.yml. The canary (weasyprint-2300) MUST resolve in arm B. See BRAIN_PAIRED_EVAL_RUNBOOK.md.",
+  "canary": "<weasyprint-2300 instance_id>",
+  "tasks": [
+    "<weasyprint-2300 instance_id>",
+    "<task-2 instance_id>",
+    "<task-3 instance_id>",
+    "<task-4 instance_id>",
+    "<task-5 instance_id>",
+    "<task-6 instance_id>",
+    "<task-7 instance_id>",
+    "<task-8 instance_id>",
+    "<task-9 instance_id>",
+    "<task-10 instance_id>"
+  ]
+}
