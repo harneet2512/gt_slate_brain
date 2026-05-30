@@ -27,6 +27,11 @@ from groundtruth.brain.delivery import (
     decide_delivery,
     verify_block,
 )
+from groundtruth.brain.envelope import (
+    EvidenceEnvelope,
+    derive_deterministic,
+    render_envelope,
+)
 from groundtruth.brain.estimator import MetricState, estimate
 from groundtruth.brain.policy import (
     BundleDecision,
@@ -65,4 +70,7 @@ __all__ = [
     "verify_block",
     "decide_delivery",
     "DeliveryDecision",
+    "EvidenceEnvelope",
+    "derive_deterministic",
+    "render_envelope",
 ]
