@@ -64,6 +64,10 @@ try:
         render_wandering_note as _brain_wandering_note,
         verify_block as _brain_verify_block,
     )
+    from groundtruth.brain.envelope import (
+        EvidenceEnvelope as _BrainEnvelope,
+        render_envelope as _brain_render_envelope,
+    )
     _BRAIN_AVAILABLE = True
 except Exception:  # noqa: BLE001 — brain package optional; never break the wrapper
     _BRAIN_AVAILABLE = False
@@ -73,6 +77,7 @@ except Exception:  # noqa: BLE001 — brain package optional; never break the wr
     _brain_decide_bundle = _brain_decide_completeness = _brain_decide_wandering = None  # type: ignore[assignment]
     _brain_bundle_note = _brain_completeness_note = _brain_wandering_note = None  # type: ignore[assignment]
     _brain_decide_delivery = None  # type: ignore[assignment]
+    _BrainEnvelope = _brain_render_envelope = None  # type: ignore[assignment]
 
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -921,7 +926,16 @@ def _maybe_fire_presubmit_verify(config: GTRuntimeConfig, obs: Any, orig_run_act
         f"({len(config._presubmit_edited_files)} edited) — run before finishing:\n"
         + "\n".join(tests[:8])
     )
-    obs = append_observation(obs, "\n" + text, layer="l6", config=config)
+    # Stage 6 (b): L6 EMITS AN ENVELOPE instead of pushing a string — the test
+    # links are VERIFIED (assertions.target_node_id>0), so the Brain renders them
+    # as a fact (no (unverified) suffix). Legacy raw text when GT_BRAIN is off.
+    if _GT_BRAIN and _BRAIN_AVAILABLE and _BrainEnvelope is not None:
+        _l6_env = _BrainEnvelope(
+            layer="l6", kind="verify", body=text, resolution_method="verified_unique"
+        )
+        obs = append_observation(obs, "\n" + _brain_render_envelope(_l6_env), layer="l6", config=config)
+    else:
+        obs = append_observation(obs, "\n" + text, layer="l6", config=config)
     _emit_structured_event(config, "L6", "presubmit_verify", rendered_text=text)
     print(f"[GT_DELIVERY] presubmit_verify: tests={len(tests)} edited={len(config._presubmit_edited_files)}", flush=True)
     return obs
