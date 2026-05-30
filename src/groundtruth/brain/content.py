@@ -40,8 +40,12 @@ def render_evidence_bundle(
         )
         for tf, tn, expr in ts:
             line = f"  - {tf}::{tn}"
-            if expr and expr.strip():
-                line += f"  (asserts: {expr.strip()[:120]})"
+            e = expr.strip() if expr else ""
+            if e:
+                # signal truncation with an explicit ellipsis — never present a
+                # silently-chopped assertion as the full correctness contract.
+                e = (e[:117] + "...") if len(e) > 120 else e
+                line += f"  (asserts: {e})"
             parts.append(line)
     parts.append("</gt-evidence>")
     return "\n".join(parts)

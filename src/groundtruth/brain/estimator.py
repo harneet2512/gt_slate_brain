@@ -190,6 +190,12 @@ def _visible_tests(conn: sqlite3.Connection, edited: frozenset[str]) -> list[tup
     ``(test_file, test_name, expression)`` tuples — the visible test that defines
     correct behavior for the symbol the agent just edited. Empty when the
     assertions table is absent or no verified link targets an edited file.
+
+    Raw SQL by module convention (matches ``_seed_files`` / ``_signatures`` /
+    ``_deterministic_caller_files``, all of which read via ``curation_map._open_ro``
+    rather than ``GraphStore``). SCHEMA-SYNC: the canonical symbol-level accessor
+    is ``GraphStore.get_assertions_for_target``; if the ``assertions`` table schema
+    changes (``test_node_id`` / ``target_node_id`` / ``expression``), update BOTH.
     """
     if not edited or not _table_exists(conn, "assertions"):
         return []

@@ -46,11 +46,22 @@ def load_resolved(report: str | Path | dict) -> set[str]:
     if isinstance(data, list):
         return {str(x) for x in data}
     if isinstance(data, dict):
+        # A recognized resolved-list key is authoritative. If it is PRESENT but
+        # not a list (a count-style summary {"resolved": 3} / null), FAIL LOUD —
+        # silently falling through to the per-task interpretation would iterate
+        # metadata keys as instance_ids and produce a wrong resolved set.
         for key in ("resolved_ids", "resolved", "resolved_instances"):
-            v = data.get(key)
-            if isinstance(v, list):
-                return {str(x) for x in v}
-        # per-task dict: {instance_id: {"resolved": bool}} or {instance_id: bool}
+            if key in data:
+                v = data[key]
+                if isinstance(v, list):
+                    return {str(x) for x in v}
+                raise ValueError(
+                    f"report key {key!r} is {type(v).__name__}, expected a list of "
+                    "instance_ids (count-style/ambiguous report — cannot derive a "
+                    "resolved set; pass a report with a resolved_ids list)"
+                )
+        # No resolved-list key → per-task dict {instance_id: {"resolved": bool}}
+        # or {instance_id: bool}. Only truthy entries count.
         out: set[str] = set()
         for k, v in data.items():
             if isinstance(v, bool) and v:
@@ -132,52 +143,53 @@ def adjudicate(
     resolved sets is used (only valid when both arms ran every task).
     """
     universe = set(tasks) if tasks is not None else (a_resolved | b_resolved)
+    # The canary is always part of the grid even if it was omitted from --tasks,
+    # so it shows in both_pass/both_fail; its PASS/KILL role is adjudicated against
+    # the RAW arm-B set below, never the universe-bounded set.
+    if canary is not None:
+        universe.add(canary)
     a = a_resolved & universe
     b = b_resolved & universe
 
-    flips = tuple(sorted(b - a))
-    regressions = tuple(sorted(a - b))
+    # The canary is a must-PRESERVE control, not a new win — exclude it from BOTH
+    # the flip set and the regression set; it is adjudicated solely by
+    # canary_preserved. Otherwise a run whose only "flip" is the canary would
+    # PASS, and a canary missing from --tasks would read as a false regression.
+    canary_set = {canary} if canary is not None else set()
+    flips = tuple(sorted((b - a) - canary_set))
+    regressions = tuple(sorted((a - b) - canary_set))
     both_pass = tuple(sorted(a & b))
     both_fail = tuple(sorted(universe - a - b))
 
     mc = mcnemar(b=len(regressions), c=len(flips))
     net_delta = len(b) - len(a)
 
+    # canary preservation is checked against the RAW arm-B resolved set (NOT the
+    # universe-bounded b), so omitting the canary from --tasks can never turn a
+    # genuinely-resolved canary into a false KILL.
     canary_preserved: bool | None = None
     if canary is not None:
-        canary_preserved = canary in b
-
-    reasons: list[str] = []
-    verdict = "PASS"
+        canary_preserved = canary in b_resolved
 
     # NOTE on "not run" vs "unresolved": a resolved set alone cannot distinguish
-    # them. The runbook therefore REQUIRES both arms to attempt every task in
-    # ``tasks``; under that contract, ``universe - resolved`` is genuinely
-    # unresolved, never merely missing. (Enforcing attempted-completeness is a
-    # runbook/preflight gate, not this adjudicator's job.)
+    # them. The runbook REQUIRES both arms to attempt every task in ``tasks``;
+    # under that contract ``universe - resolved`` is genuinely unresolved.
 
-    # §5 KILL criteria (any one fires):
+    # §5 verdict — single pass, one reason per criterion, no dead branches.
+    reasons: list[str] = []
+    kill = False
     if canary is not None and not canary_preserved:
-        verdict = "KILL"
+        kill = True
         reasons.append(f"canary {canary!r} not resolved in arm B (redirect broke the proven path)")
     if regressions:
-        verdict = "KILL"
+        kill = True
         reasons.append(f"{len(regressions)} regression(s) (dampening): {list(regressions)}")
-    if not flips and net_delta <= 0:
-        verdict = "KILL"
-        reasons.append("net resolution Δ ≤ 0 and no flip — lever is outside the brain (null confirmed)")
-
-    # §5 PASS criteria (all must hold): ≥1 flip, canary preserved, zero regressions.
-    if verdict != "KILL":
-        if not flips:
-            verdict = "KILL"
-            reasons.append("no flip attributable to the brain")
-        elif canary is not None and not canary_preserved:
-            verdict = "KILL"
-        elif regressions:
-            verdict = "KILL"
-        else:
-            reasons.append(f"{len(flips)} flip(s), canary preserved, zero regressions")
+    if not flips:
+        kill = True
+        reasons.append("no new (non-canary) flip attributable to the brain — lever may be outside the brain")
+    verdict = "KILL" if kill else "PASS"
+    if not kill:
+        reasons.append(f"{len(flips)} new flip(s), canary preserved, zero regressions")
 
     return PairedResult(
         tasks=tuple(sorted(universe)),

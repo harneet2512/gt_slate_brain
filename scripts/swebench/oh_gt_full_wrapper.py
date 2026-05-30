@@ -188,6 +188,17 @@ def _record_edit_iter(config: Any, iter_num: int, path: str) -> None:
 
 def _reset_iter_state(config: Any, task_id: str) -> None:
     config._iter_state.update({"task_id": task_id, "iter_to_first_edit": None, "iter_to_first_source_edit": None})
+    # Per-task reset of the brain's once-per-task fired flags + pre-edit signature
+    # snapshots. Without this, a config reused across tasks (the wrap-once guard
+    # can keep task-1's config in the closure) would carry fired=True into task 2
+    # and permanently silence the proactive bundle / completeness / wandering rules.
+    config._brain_proactive_fired = False
+    config._brain_completeness_fired = False
+    config._brain_wandering_fired = False
+    try:
+        config._sig_snapshots.clear()
+    except (AttributeError, TypeError):
+        config._sig_snapshots = {}
 
 
 def _flush_iter_state(config: Any = None) -> None:
@@ -1040,7 +1051,8 @@ def make_reindex_command(path: str, config: GTRuntimeConfig) -> str:
 
 
 def _brain_handle_suppress(
-    config: "GTRuntimeConfig", event: "HookEvent", rel: "str | None", obs: Any, orig_run_action: Any
+    config: "GTRuntimeConfig", event: "HookEvent", rel: "str | None", obs: Any, orig_run_action: Any,
+    suppress_reason: str = "",
 ) -> Any:
     """Handle a brain-suppressed step: keep file tracking, inject nothing.
 
@@ -1067,9 +1079,11 @@ def _brain_handle_suppress(
 
     # WANDERING content (GT_BRAIN, authorized): the loop back-off withholds the
     # loop noise, but at the FIRST wandering moment with VERIFIED scope we surface
-    # that scope ONCE as facts to re-anchor on (then withhold thereafter). Bounded
-    # by the fired flag — the estimate runs only until it fires once.
-    if not getattr(config, "_brain_wandering_fired", False):
+    # that scope ONCE as facts to re-anchor on (then withhold thereafter). Only on
+    # the NO-PROGRESS suppression arm — never on a verbatim-repeat suppression (the
+    # cheap loop arm uses graph_db=None; running the full graph estimate on every
+    # byte-identical loop step would reintroduce exactly that cost for nothing).
+    if "no_progress" in suppress_reason and not getattr(config, "_brain_wandering_fired", False):
         try:
             _wview = _BrainView(config)
             _wstate = _brain_estimate(_wview, config.graph_db)
@@ -1117,18 +1131,23 @@ def _brain_capture_pre_edit_sigs(config: "GTRuntimeConfig", path: str) -> None:
         print(f"[GT_META] brain sig-snapshot error: {exc}", flush=True)
 
 
-def _brain_maybe_fire_proactive(config: "GTRuntimeConfig", obs: Any) -> Any:
+def _brain_maybe_fire_proactive(
+    config: "GTRuntimeConfig", obs: Any, *, about_to_submit: bool = False
+) -> Any:
     """Proactive rules (GT_BRAIN-gated, verified-content-only, diagnostic framing):
 
     - **§4 BUNDLE at first edit** (FLIP_AUDIT §4 — the highest-probability lever):
       uncovered verified callers + visible-test assertions for the symbol the agent
       just edited. Provenance + relevance gated; NOT gated on a signature change
       (the redirect — the sig-change gate would have silenced GT on weasyprint).
-    - **COMPLETENESS at review/submit**: verified uncovered call-scope + historical
-      co-change partners not in the diff.
+    - **COMPLETENESS at the review/submit moment**: verified uncovered call-scope +
+      historical co-change partners not in the diff.
 
-    Each fires at most once; the graph estimate runs only while a rule is unfired
-    (so at most a bounded number of cheap SQL passes). Every block routes through
+    Cheap TRAJECTORY gates run before the (expensive) graph estimate, so the SQL
+    sweep happens only on a step where a rule could actually fire — after an edit
+    for the bundle, at review/submit for completeness — not on every step. Each
+    rule fires at most once. ``about_to_submit`` (the finish action) makes the
+    completeness submit-path reachable. Every block routes through
     ``append_observation`` -> ``verify_block``."""
     bundle_done = getattr(config, "_brain_proactive_fired", False)
     completeness_done = getattr(config, "_brain_completeness_fired", False)
@@ -1136,9 +1155,22 @@ def _brain_maybe_fire_proactive(config: "GTRuntimeConfig", obs: Any) -> Any:
         return obs
     try:
         view = _BrainView(config)
-        state = _brain_estimate(view, config.graph_db, signature_snapshots=config._sig_snapshots)
+        # Cheap trajectory preconditions — skip the graph estimate entirely when
+        # neither rule can fire this step (bundle is too late at submit; the
+        # bundle anchors the FIRST edit).
+        want_bundle = (not bundle_done) and bool(view.edited_files) and not about_to_submit
+        want_completeness = (not completeness_done) and (
+            about_to_submit or _brain_is_review_phase(view)
+        )
+        if not (want_bundle or want_completeness):
+            return obs
 
-        if not bundle_done:
+        step = _BrainStep("finish", None, "") if about_to_submit else None
+        state = _brain_estimate(
+            view, config.graph_db, step=step, signature_snapshots=config._sig_snapshots
+        )
+
+        if want_bundle:
             bd = _brain_decide_bundle(view, state, already_fired=bundle_done)
             if bd.fire:
                 note = _brain_bundle_note(bd.callers, bd.tests)
@@ -1151,7 +1183,7 @@ def _brain_maybe_fire_proactive(config: "GTRuntimeConfig", obs: Any) -> Any:
                         flush=True,
                     )
 
-        if not completeness_done:
+        if want_completeness:
             cd = _brain_decide_completeness(view, state, already_fired=completeness_done)
             if cd.fire:
                 note = _brain_completeness_note(cd.uncovered_scope, cd.co_change)
@@ -3696,7 +3728,10 @@ def wrap_runtime_run_action(runtime: Any, config: GTRuntimeConfig | None = None)
                 _bstate = _brain_estimate(_bview, None, step=_BrainStep(event.kind, _brel, _raw_hash))
                 _bdec = _brain_decide(_bview, _bstate, current_is_new=_is_new)
                 if _bdec.suppress:
-                    obs = _brain_handle_suppress(config, event, _brel, obs, orig_run_action)
+                    obs = _brain_handle_suppress(
+                        config, event, _brel, obs, orig_run_action,
+                        suppress_reason=_bdec.reason,
+                    )
                     print(
                         f"[GT_META] BRAIN_SUPPRESS reason={_bdec.reason} "
                         f"npw={_bstate.no_progress_window} ac={config.action_count}",
@@ -3706,12 +3741,13 @@ def wrap_runtime_run_action(runtime: Any, config: GTRuntimeConfig | None = None)
             except Exception as _brain_exc:  # noqa: BLE001 — never break the agent loop
                 print(f"[GT_META] brain gate error: {_brain_exc}", flush=True)
 
-        # Brain Stage 5 proactive contract-break (GT_BRAIN-gated): at the edit→review
-        # transition, surface uncovered VERIFIED callers ONCE when a real interface break
-        # exists (signature/return changed + uncovered caller). Precise — does not
-        # false-positive on correct internal fixes or logic bugs; diagnostic framing.
-        if _GT_BRAIN and _BRAIN_AVAILABLE and not _GT_BASELINE and not _is_finish_action:
-            obs = _brain_maybe_fire_proactive(config, obs)
+        # Brain proactive rules (GT_BRAIN-gated): §4 bundle at first edit +
+        # completeness at the review/submit moment. Runs on the finish action too
+        # (about_to_submit) so the completeness submit-path is reachable — the
+        # bundle self-skips at submit. Cheap trajectory gates inside avoid the
+        # graph estimate on steps where nothing can fire.
+        if _GT_BRAIN and _BRAIN_AVAILABLE and not _GT_BASELINE:
+            obs = _brain_maybe_fire_proactive(config, obs, about_to_submit=_is_finish_action)
 
         # L6 pre-submit (Option 2): verifiable diff-wide test consolidation at
         # the edit→review transition, while the agent can still act. Fires once.
