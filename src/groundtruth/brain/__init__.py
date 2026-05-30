@@ -22,7 +22,11 @@ from groundtruth.brain.content import (
     render_evidence_bundle,
     render_wandering_note,
 )
-from groundtruth.brain.delivery import verify_block
+from groundtruth.brain.delivery import (
+    DeliveryDecision,
+    decide_delivery,
+    verify_block,
+)
 from groundtruth.brain.estimator import MetricState, estimate
 from groundtruth.brain.policy import (
     BundleDecision,
@@ -58,4 +62,7 @@ __all__ = [
     "render_evidence_bundle",
     "render_completeness_note",
     "render_wandering_note",
+    "verify_block",
+    "decide_delivery",
+    "DeliveryDecision",
 ]

@@ -21,7 +21,9 @@ Pure check; no side effects.
 """
 from __future__ import annotations
 
+import hashlib
 import re
+from dataclasses import dataclass
 from typing import Optional
 
 _DIAG_LEAK = re.compile(r"\[GT_[A-Z]+\]")
@@ -46,3 +48,53 @@ def verify_block(text: Optional[str]) -> Optional[str]:
         if m is None or not m.group(1).strip():
             return None
     return text
+
+
+@dataclass(frozen=True)
+class DeliveryDecision:
+    """The Brain's verdict for ONE piece of content heading to the agent."""
+
+    deliver: bool
+    text: Optional[str] = None
+    layer: str = "unknown"
+    reason: str = ""
+
+
+def _delivery_key(layer: str, text: str) -> str:
+    """Whitespace-normalized content key for cross-delivery dedup."""
+    norm = " ".join(text.split())
+    return f"{layer}:{hashlib.md5(norm.encode('utf-8')).hexdigest()[:16]}"
+
+
+def decide_delivery(
+    layer: str,
+    text: Optional[str],
+    *,
+    seen: Optional[set[str]] = None,
+) -> DeliveryDecision:
+    """The single Brain decision EVERY layer's agent-bound content routes through.
+
+    This is what makes the Brain the one intermediary between the original
+    producers (L1/L3/L3b/L5/L6) and the agent: a producer no longer decides what
+    the agent sees — it hands its content here, tagged with its ``layer``, and the
+    Brain decides deliver-or-suppress. Deterministic, no LLM.
+
+    Decisions (correct-or-quiet):
+    - **safety** — drop a block ``verify_block`` rejects (leak / empty / malformed
+      gt-evidence tag);
+    - **dedup** — when a ``seen`` set is supplied, suppress a block whose
+      normalized content was already delivered (the Brain owns one record of what
+      reached the agent, across all layers), and record it otherwise.
+
+    Returns a ``DeliveryDecision``; ``.text`` is the content to deliver (unchanged
+    when safe) or ``None`` when suppressed.
+    """
+    safe = verify_block(text)
+    if safe is None:
+        return DeliveryDecision(False, None, layer, "unsafe")
+    if seen is not None:
+        key = _delivery_key(layer, safe)
+        if key in seen:
+            return DeliveryDecision(False, None, layer, "duplicate")
+        seen.add(key)
+    return DeliveryDecision(True, safe, layer, "deliver")

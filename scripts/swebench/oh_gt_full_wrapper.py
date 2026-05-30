@@ -53,6 +53,7 @@ try:
         decide as _brain_decide,
         decide_bundle as _brain_decide_bundle,
         decide_completeness as _brain_decide_completeness,
+        decide_delivery as _brain_decide_delivery,
         decide_proactive as _brain_decide_proactive,
         decide_wandering as _brain_decide_wandering,
         estimate as _brain_estimate,
@@ -71,6 +72,7 @@ except Exception:  # noqa: BLE001 — brain package optional; never break the wr
     _brain_decide_proactive = _brain_is_review_phase = _brain_contract_note = None  # type: ignore[assignment]
     _brain_decide_bundle = _brain_decide_completeness = _brain_decide_wandering = None  # type: ignore[assignment]
     _brain_bundle_note = _brain_completeness_note = _brain_wandering_note = None  # type: ignore[assignment]
+    _brain_decide_delivery = None  # type: ignore[assignment]
 
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -1663,10 +1665,12 @@ def _deliver_or_trace(
         return obs
 
     config._last_gt_action = config.action_count
+    # Route through the Brain's single delivery decision, tagged with this layer,
+    # so the Brain (not the producer) owns deliver/suppress for L3/L3b/L4/L5b.
     if prepend:
-        obs = prepend_observation(obs, payload)
+        obs = prepend_observation(obs, payload, layer=layer, config=config)
     else:
-        obs = append_observation(obs, payload)
+        obs = append_observation(obs, payload, layer=layer, config=config)
 
     print(
         f"[GT_TRACE] {layer}_delivery status=DELIVERED "
@@ -2665,15 +2669,42 @@ def _strip_scaffold_files(
     )
 
 
-def append_observation(obs: Any, text: str) -> Any:
-    # Brain Stage 3 delivery gate (invariant 6, GT_BRAIN-gated): drop a malformed
-    # block (empty / [GT_*] diagnostic leak / empty-or-multi gt-evidence tag) rather
-    # than glue telemetry or zero-content noise onto the agent's observation.
-    if _GT_BRAIN and _BRAIN_AVAILABLE and text:
-        _checked = _brain_verify_block(text)
-        if _checked is None:
-            print(f"[GT_META] BRAIN_GATE dropped malformed append ({len(text)} chars)", flush=True)
-            return obs
+def _brain_delivery_ok(text: str, layer: str, config: Any) -> bool:
+    """The single Brain delivery decision for one agent-bound block (GT_BRAIN only).
+
+    Every producer that reaches the agent's observation routes through here, tagged
+    with its ``layer``: the Brain decides deliver-or-suppress (safety via
+    verify_block + cross-layer dedup over a config-owned seen-set). When ``config``
+    is absent we fall back to the safety check alone. Returns True to deliver."""
+    if not (_GT_BRAIN and _BRAIN_AVAILABLE and text):
+        return True
+    if config is not None and _brain_decide_delivery is not None:
+        seen = getattr(config, "_brain_delivered", None)
+        if seen is None:
+            seen = set()
+            config._brain_delivered = seen
+        _dec = _brain_decide_delivery(layer, text, seen=seen)
+        if not _dec.deliver:
+            print(
+                f"[GT_META] BRAIN_DELIVER suppressed layer={layer} "
+                f"reason={_dec.reason} ({len(text)} chars)",
+                flush=True,
+            )
+            return False
+        return True
+    # No config (or primitive unavailable) → safety gate only (legacy behavior).
+    if _brain_verify_block(text) is None:
+        print(f"[GT_META] BRAIN_GATE dropped malformed block layer={layer} ({len(text)} chars)", flush=True)
+        return False
+    return True
+
+
+def append_observation(obs: Any, text: str, *, layer: str = "unknown", config: Any = None) -> Any:
+    # Brain single delivery decision (GT_BRAIN-gated): the producer no longer
+    # decides what the agent sees — it hands content here tagged with its layer
+    # and the Brain decides deliver/suppress (safety + cross-layer dedup).
+    if not _brain_delivery_ok(text, layer, config):
+        return obs
     current = getattr(obs, "content", "")
     if current is None:
         current = ""
@@ -2689,14 +2720,11 @@ def append_observation(obs: Any, text: str) -> Any:
     return obs
 
 
-def prepend_observation(obs: Any, text: str) -> Any:
+def prepend_observation(obs: Any, text: str, *, layer: str = "unknown", config: Any = None) -> Any:
     """Prepend GT evidence before the observation content (max 150 tokens / ~600 chars)."""
-    # Brain Stage 3 delivery gate (invariant 6, GT_BRAIN-gated) — same single choke.
-    if _GT_BRAIN and _BRAIN_AVAILABLE and text:
-        _checked = _brain_verify_block(text)
-        if _checked is None:
-            print(f"[GT_META] BRAIN_GATE dropped malformed prepend ({len(text)} chars)", flush=True)
-            return obs
+    # Brain single delivery decision (GT_BRAIN-gated) — same single choke as append.
+    if not _brain_delivery_ok(text, layer, config):
+        return obs
     current = getattr(obs, "content", "")
     if current is None:
         current = ""
@@ -6730,7 +6758,18 @@ def patched_get_instruction(instance: Any, metadata: Any) -> Any:
                     f"{_demo_text}\n"
                     "</gt-demo>\n"
                 )
-        content = f"<gt-task-brief>\n{brief}\n</gt-task-brief>\n\n{tools_hint}\n{_demo}\n" + content
+        # The L1 brief is the only producer that reaches the agent via the
+        # INSTRUCTION rather than an observation; route it through the SAME Brain
+        # decision (tagged L1) so no layer bypasses the Brain. Safety-only here
+        # (no dedup — the brief is a one-time, separate-channel injection).
+        _l1_deliver = True
+        if _GT_BRAIN and _BRAIN_AVAILABLE and brief and _brain_decide_delivery is not None:
+            _l1_dec = _brain_decide_delivery("L1", brief, seen=None)
+            _l1_deliver = _l1_dec.deliver
+            if not _l1_deliver:
+                print(f"[GT_META] BRAIN_DELIVER suppressed L1 brief reason={_l1_dec.reason}", flush=True)
+        if _l1_deliver:
+            content = f"<gt-task-brief>\n{brief}\n</gt-task-brief>\n\n{tools_hint}\n{_demo}\n" + content
         # Log L1 brief injection — use full untruncated brief for logging
         brief_full_for_log = (
             getattr(instance, "gt_brief_full", "")
