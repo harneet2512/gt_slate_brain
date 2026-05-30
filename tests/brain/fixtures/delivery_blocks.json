@@ -1,0 +1,6 @@
+{
+ "source": "product_v1/stage1_artifacts GT-arm runs (deepseek-v4-flash)",
+ "note": "Real malformed-delivery signature ([GT_STATUS] diagnostic leaked into agent obs) + a well-formed injected block as positive control. Basis for the delivery-gate TTD.",
+ "real_diagnostic_leak": "d(self, fn, *args, **kwargs):\n[GT_STATUS] success:test_targets:8\nHere's the result of running `cat -n` on /workspace/amo",
+ "wellformed_block": "<gt-evidence trigger=\"post_edit:sh.py\">\n  L896: return wait_for_completion().__await__()\n[SIGNATURE] def __await__(self):\n[PATTERN] sibling __init__() does:\n# self.ran is used for auditing what actually ran.  for example, in\n        # exceptions, or if you just want to know what was ran after the\n        # command ran\n        self.ran = \" \".join([shlex_quote(str(arg)) for arg in cmd])\n\n        self.call_args = call_args\n        self.cmd = cmd\n\n        s\n[FORMAT] Tests assert keys: \"ok_code\", \"stars\", \"newline_buffer_success\", \"unbuffered_success\"\n[BEHAVIORAL CONTRACT]\n  GUARD: if self.call_args.get(\"return_cmd\") -> return\n  L893: return self\n  L894: return str(self)\n[TEST] tests/sh_test.py: self.assertEqual(e.errno, num)\n[TEST] tests/sh_test.py: self.assertEqual(len(w), 1)\n[TEST] tests/sh_test.py: self.assertTrue(issubclass(w[-1].category, DeprecationWarning))\n</gt-evidence>"
+}

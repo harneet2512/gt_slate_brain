@@ -37,6 +37,7 @@ from groundtruth.state.agent_state import (
     compute_band,
     L5TrajectoryState,
 )
+from groundtruth.state.trajectory_view import Step, TrajectoryView
 
 __all__ = [
     "AgentPhase",
@@ -46,6 +47,8 @@ __all__ = [
     "L5TrajectoryState",
     "PendingSuggestion",
     "SearchEvent",
+    "Step",
+    "TrajectoryView",
     "ViewedFile",
     "canonical_repo_path",
     "compute_band",

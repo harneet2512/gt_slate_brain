@@ -43,6 +43,27 @@ try:
 except ImportError:
     _LEDGER_AVAILABLE = False
 
+# Brain Stage 3 (loop back-off + delivery gate). GT_BRAIN-gated, default OFF, so the
+# current dispatch path is byte-identical unless explicitly enabled. The policy is
+# deterministic and LLM-free; it only WITHHOLDS injection (never adds content).
+_GT_BRAIN = os.environ.get("GT_BRAIN", "0") == "1"
+try:
+    from groundtruth.state import Step as _BrainStep, TrajectoryView as _BrainView
+    from groundtruth.brain import (
+        decide as _brain_decide,
+        decide_proactive as _brain_decide_proactive,
+        estimate as _brain_estimate,
+        is_review_phase as _brain_is_review_phase,
+        render_contract_break_note as _brain_contract_note,
+        verify_block as _brain_verify_block,
+    )
+    _BRAIN_AVAILABLE = True
+except Exception:  # noqa: BLE001 — brain package optional; never break the wrapper
+    _BRAIN_AVAILABLE = False
+    _BrainStep = _BrainView = None  # type: ignore[assignment]
+    _brain_decide = _brain_estimate = _brain_verify_block = None  # type: ignore[assignment]
+    _brain_decide_proactive = _brain_is_review_phase = _brain_contract_note = None  # type: ignore[assignment]
+
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _SCRIPT_DIR.parents[1]
@@ -438,6 +459,47 @@ class GTRuntimeConfig:
     })
     _stuck_compat_history: list[tuple[str, str]] = field(default_factory=list)
     _stuck_compat_skip_count: int = 0
+    # Brain Stage 1 (TrajectoryView): action_count at which a file FIRST entered
+    # viewed_files / edited_files. -1 = undefined (no new view/edit yet). Stamped
+    # by record_view / record_edit at the existing add-sites; read read-only by
+    # TrajectoryView to compute no_progress_window. Not a parallel store.
+    last_new_view_iter: int = -1
+    last_new_edit_iter: int = -1
+    # Brain Stage 3 (loop back-off): action_count values at which no_progress_window
+    # RESETS — i.e. each time a NEW file enters viewed_files or edited_files. The
+    # gaps between consecutive entries are the task's own "productive cadence"; the
+    # policy derives a per-task no-progress cutoff from them (never a hardcoded N).
+    new_file_iters: list[int] = field(default_factory=list)
+    # Brain Stage 5 (proactive contract-break): pre-edit signature snapshots
+    # {(rel, name): (signature, return_type)} captured BEFORE each edit's L6 reindex
+    # (setdefault keeps the original pre-edit contract); + the once-per-task fire flag.
+    _sig_snapshots: dict = field(default_factory=dict)
+    _brain_proactive_fired: bool = False
+
+    def record_view(self, rel: str) -> None:
+        """Record that the agent viewed source file ``rel`` (post_view).
+
+        Encapsulates the existing add-behavior (viewed_files + _read_history) and
+        stamps last_new_view_iter the first time ``rel`` is seen. Behavior on the
+        underlying set / history is identical to the prior inline ``add``+``append``.
+        """
+        if rel not in self.viewed_files:
+            self.last_new_view_iter = self.action_count
+            self.new_file_iters.append(self.action_count)
+        self.viewed_files.add(rel)
+        self._read_history.append(rel)
+
+    def record_edit(self, rel: str) -> None:
+        """Record that the agent edited source file ``rel`` (post_edit).
+
+        Encapsulates only the viewed/edited-set add + first-seen stamp; the
+        scaffold/test-gated _source_edit_actions / _presubmit_* tracking stays at
+        the call-site. Behavior on edited_files is identical to the prior inline add.
+        """
+        if rel not in self.edited_files:
+            self.last_new_edit_iter = self.action_count
+            self.new_file_iters.append(self.action_count)
+        self.edited_files.add(rel)
 
     def __post_init__(self) -> None:
         if self._host_graph_db and os.path.exists(self._host_graph_db):
@@ -967,6 +1029,90 @@ def make_reindex_command(path: str, config: GTRuntimeConfig) -> str:
         f"{config.gt_index_bin} -root={config.workspace_root} "
         f"-file={rel} -output={config.graph_db}"
     )
+
+
+def _brain_handle_suppress(
+    config: "GTRuntimeConfig", event: "HookEvent", rel: "str | None", obs: Any, orig_run_action: Any
+) -> Any:
+    """Handle a brain-suppressed step: keep file tracking, inject nothing.
+
+    Finding 1 (BRAIN_CAPABILITY_AUDIT): the loop gate early-returns BEFORE the
+    post_edit dispatch where the L6 reindex (``make_reindex_command``) lives, so a
+    suppressed *edit* would leave graph.db stale and starve the next step's
+    scope/contract metrics. Suppression must drop only the INJECTION — a suppressed
+    edit is still reindexed here so the graph stays fresh.
+    """
+    if event.kind == "post_view" and rel:
+        config.record_view(rel)
+    elif event.kind == "post_edit" and rel:
+        config.record_edit(rel)
+        _brain_capture_pre_edit_sigs(config, event.path)  # snapshot before reindex
+        try:
+            _ri = make_reindex_command(event.path, config)
+            if _ri:
+                _run_internal(orig_run_action, _ri, 120)
+                _tel = getattr(config, "telemetry", None)
+                if _tel is not None:
+                    _tel.record_reindex(True)
+        except Exception as _exc:  # noqa: BLE001 — never break the agent loop
+            print(f"[GT_META] brain suppress-reindex error: {_exc}", flush=True)
+    config.last_visible_observation = obs
+    return obs
+
+
+def _brain_capture_pre_edit_sigs(config: "GTRuntimeConfig", path: str) -> None:
+    """Stage 5: snapshot the ORIGINAL pre-edit signatures of the edited file BEFORE its
+    L6 reindex, so contract_break_risk can later detect a net interface change.
+    ``setdefault`` keeps the earliest (true pre-edit) value across repeated edits.
+    Keyed by the same normalized rel the estimator reads (``edited_files``)."""
+    try:
+        rel = _normalize_rel_path(path, config)
+        if not rel or not config.graph_db or not os.path.exists(config.graph_db):
+            return
+        snaps = config._sig_snapshots
+        conn = sqlite3.connect(f"file:{config.graph_db}?mode=ro", uri=True, timeout=5)
+        try:
+            conn.execute("PRAGMA query_only = 1")
+            rows = conn.execute(
+                "SELECT name, COALESCE(signature,''), COALESCE(return_type,'') FROM nodes "
+                "WHERE file_path = ? AND label IN ('Function','Method')",
+                (rel,),
+            ).fetchall()
+        finally:
+            conn.close()
+        for name, sig, ret in rows:
+            if name:
+                snaps.setdefault((rel, name), (sig, ret))
+    except Exception as exc:  # noqa: BLE001 — snapshot is best-effort; never break the loop
+        print(f"[GT_META] brain sig-snapshot error: {exc}", flush=True)
+
+
+def _brain_maybe_fire_proactive(config: "GTRuntimeConfig", obs: Any) -> Any:
+    """Stage 5 proactive rule: at the edit→review transition, if a VERIFIED contract
+    break exists (signature/return changed AND ≥1 uncovered verified caller), surface
+    those callers ONCE, through the delivery gate. Cheap trajectory gate first so the
+    graph estimate runs at most one moment. GT_BRAIN-gated by the caller."""
+    if getattr(config, "_brain_proactive_fired", False):
+        return obs
+    try:
+        view = _BrainView(config)
+        if not _brain_is_review_phase(view):  # cheap, trajectory-only — avoids the graph query
+            return obs
+        state = _brain_estimate(view, config.graph_db, signature_snapshots=config._sig_snapshots)
+        dec = _brain_decide_proactive(view, state, already_fired=config._brain_proactive_fired)
+        if dec.fire:
+            note = _brain_contract_note(dec.callers)
+            if note:
+                obs = append_observation(obs, note)  # routes through verify_block
+                config._brain_proactive_fired = True
+                print(
+                    f"[GT_META] BRAIN_PROACTIVE contract_break callers={list(dec.callers)[:5]} "
+                    f"ac={config.action_count}",
+                    flush=True,
+                )
+    except Exception as exc:  # noqa: BLE001 — never break the agent loop
+        print(f"[GT_META] brain proactive error: {exc}", flush=True)
+    return obs
 
 
 def make_view_hook_command(event: HookEvent, config: GTRuntimeConfig) -> str:
@@ -2435,6 +2581,14 @@ def _strip_scaffold_files(
 
 
 def append_observation(obs: Any, text: str) -> Any:
+    # Brain Stage 3 delivery gate (invariant 6, GT_BRAIN-gated): drop a malformed
+    # block (empty / [GT_*] diagnostic leak / empty-or-multi gt-evidence tag) rather
+    # than glue telemetry or zero-content noise onto the agent's observation.
+    if _GT_BRAIN and _BRAIN_AVAILABLE and text:
+        _checked = _brain_verify_block(text)
+        if _checked is None:
+            print(f"[GT_META] BRAIN_GATE dropped malformed append ({len(text)} chars)", flush=True)
+            return obs
     current = getattr(obs, "content", "")
     if current is None:
         current = ""
@@ -2452,6 +2606,12 @@ def append_observation(obs: Any, text: str) -> Any:
 
 def prepend_observation(obs: Any, text: str) -> Any:
     """Prepend GT evidence before the observation content (max 150 tokens / ~600 chars)."""
+    # Brain Stage 3 delivery gate (invariant 6, GT_BRAIN-gated) — same single choke.
+    if _GT_BRAIN and _BRAIN_AVAILABLE and text:
+        _checked = _brain_verify_block(text)
+        if _checked is None:
+            print(f"[GT_META] BRAIN_GATE dropped malformed prepend ({len(text)} chars)", flush=True)
+            return obs
     current = getattr(obs, "content", "")
     if current is None:
         current = ""
@@ -3441,12 +3601,11 @@ def wrap_runtime_run_action(runtime: Any, config: GTRuntimeConfig | None = None)
             if event.kind == "post_view":
                 _rv = _normalize_rel_path(event.path, config)
                 if _rv:
-                    config.viewed_files.add(_rv)
-                    config._read_history.append(_rv)
+                    config.record_view(_rv)
             elif event.kind == "post_edit":
                 _rp = _normalize_rel_path(event.path, config)
                 if _rp:
-                    config.edited_files.add(_rp)
+                    config.record_edit(_rp)
             config.last_visible_observation = obs
             config._stuck_compat_skip_count += 1
             _emit_agent_event(config, action, event, _action_file)
@@ -3466,6 +3625,41 @@ def wrap_runtime_run_action(runtime: Any, config: GTRuntimeConfig | None = None)
 
         _aclass = _action_class(action)
         config.action_count += 1
+
+        # Brain Stage 3 loop back-off (GT_BRAIN-gated). π is the cross-event decision
+        # the event-bound layers structurally cannot make: when the agent is looping
+        # (verbatim repeat, or no progress past THIS task's own productive cadence) we
+        # mirror the STUCK_COMPAT skip — keep file tracking, inject nothing — so the
+        # harness stuck-detector can see repetition. Loop arm is graph-free (graph_db
+        # =None, cheap). Never fires on a step that itself introduces a new file.
+        if _GT_BRAIN and _BRAIN_AVAILABLE and not _GT_BASELINE and not _is_finish_action:
+            try:
+                _brel = _normalize_rel_path(event.path, config) if event.path else None
+                _is_new = bool(
+                    (event.kind == "post_view" and _brel and _brel not in config.viewed_files)
+                    or (event.kind == "post_edit" and _brel and _brel not in config.edited_files)
+                )
+                _bview = _BrainView(config)
+                _bstate = _brain_estimate(_bview, None, step=_BrainStep(event.kind, _brel, _raw_hash))
+                _bdec = _brain_decide(_bview, _bstate, current_is_new=_is_new)
+                if _bdec.suppress:
+                    obs = _brain_handle_suppress(config, event, _brel, obs, orig_run_action)
+                    print(
+                        f"[GT_META] BRAIN_SUPPRESS reason={_bdec.reason} "
+                        f"npw={_bstate.no_progress_window} ac={config.action_count}",
+                        flush=True,
+                    )
+                    return obs
+            except Exception as _brain_exc:  # noqa: BLE001 — never break the agent loop
+                print(f"[GT_META] brain gate error: {_brain_exc}", flush=True)
+
+        # Brain Stage 5 proactive contract-break (GT_BRAIN-gated): at the edit→review
+        # transition, surface uncovered VERIFIED callers ONCE when a real interface break
+        # exists (signature/return changed + uncovered caller). Precise — does not
+        # false-positive on correct internal fixes or logic bugs; diagnostic framing.
+        if _GT_BRAIN and _BRAIN_AVAILABLE and not _GT_BASELINE and not _is_finish_action:
+            obs = _brain_maybe_fire_proactive(config, obs)
+
         # L6 pre-submit (Option 2): verifiable diff-wide test consolidation at
         # the edit→review transition, while the agent can still act. Fires once.
         if not _GT_BASELINE and not _is_finish_action:
@@ -3764,8 +3958,7 @@ def wrap_runtime_run_action(runtime: Any, config: GTRuntimeConfig | None = None)
         if event.kind == "post_view":
             rel_view = _normalize_rel_path(event.path, config)
             if rel_view:
-                config.viewed_files.add(rel_view)
-                config._read_history.append(rel_view)
+                config.record_view(rel_view)
 
             # Auto-query: on first read of a source file, auto-run gt_query
             # on the top symbol to give the agent graph context without asking.
@@ -4248,7 +4441,7 @@ def wrap_runtime_run_action(runtime: Any, config: GTRuntimeConfig | None = None)
             # --- Phase 1: Record edit state BEFORE any L5 checks (Decision 30, Bug 5 fix) ---
             rel_p = _normalize_rel_path(event.path, config)
             if rel_p:
-                config.edited_files.add(rel_p)
+                config.record_edit(rel_p)
                 if not _is_scaffolding_path(rel_p) and not _is_test_path(rel_p):
                     config._source_edit_actions.append(config.action_count)
                     config._search_count_since_edit = 0
@@ -4327,6 +4520,10 @@ def wrap_runtime_run_action(runtime: Any, config: GTRuntimeConfig | None = None)
                 _log_gt_interaction(config, "L3", f"post_edit:{event.path}", "scaffold_skip", "skipped:scaffolding_file", agent_action_before=act_text[:300], event_id=_scaffold_eid or "")
                 return obs
 
+            # Brain Stage 5: snapshot pre-edit signatures BEFORE reindex (GT_BRAIN-gated)
+            # so contract_break_risk can later detect a net interface change.
+            if _GT_BRAIN and _BRAIN_AVAILABLE:
+                _brain_capture_pre_edit_sigs(config, event.path)
             # --- Phase 4: L6 reindex BEFORE L3 post_edit hook (sequential ordering is load-bearing) ---
             reindex_cmd = make_reindex_command(event.path, config)
             if not reindex_cmd:

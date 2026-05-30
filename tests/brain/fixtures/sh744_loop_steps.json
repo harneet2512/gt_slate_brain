@@ -1,0 +1,273 @@
+{
+ "instance_id": "amoffat__sh-744",
+ "source": "product_v1/stage1_artifacts/task-amoffat__sh-744 (GT-arm, deepseek-v4-flash)",
+ "note": "Frozen real trajectory. 2 files viewed, 1 edited over 38 actions; last new file at step 21; dead no-progress tail to step 38. Max consecutive identical (action,obs)=2 (<4) so OH stuck detector + exact-hash STUCK_COMPAT never fire.",
+ "steps": [
+  {
+   "a": "system",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "system:",
+   "obs_hash": ""
+  },
+  {
+   "a": "message",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "message:",
+   "obs_hash": ""
+  },
+  {
+   "a": "recall",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "recall:",
+   "obs_hash": "55df673feabf"
+  },
+  {
+   "a": "read",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "read:/workspace/amoffat__sh-744",
+   "obs_hash": "dcbaf72847e4"
+  },
+  {
+   "a": "task_tracking",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "task_tracking:plan",
+   "obs_hash": "eff3ae61e5e5"
+  },
+  {
+   "a": "run",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "run:grep -n \"_return_cmd\\|def __await__\\|class RunningCommand\\|class Command\\|de",
+   "obs_hash": "d96b22a34f37"
+  },
+  {
+   "a": "read",
+   "kind": "post_view",
+   "file": "/workspace/amoffat__sh-744/sh.py",
+   "action_repr": "read:/workspace/amoffat__sh-744/sh.py",
+   "obs_hash": "b0a8721fdf99"
+  },
+  {
+   "a": "read",
+   "kind": "post_view",
+   "file": "/workspace/amoffat__sh-744/sh.py",
+   "action_repr": "read:/workspace/amoffat__sh-744/sh.py",
+   "obs_hash": "78494e11a531"
+  },
+  {
+   "a": "read",
+   "kind": "post_view",
+   "file": "/workspace/amoffat__sh-744/sh.py",
+   "action_repr": "read:/workspace/amoffat__sh-744/sh.py",
+   "obs_hash": "dbb08e77b610"
+  },
+  {
+   "a": "read",
+   "kind": "post_view",
+   "file": "/workspace/amoffat__sh-744/tests/sh_test.py",
+   "action_repr": "read:/workspace/amoffat__sh-744/tests/sh_test.py",
+   "obs_hash": "5c3d99db160c"
+  },
+  {
+   "a": "run",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "run:grep -n \"_return_cmd\\|return_cmd\\|__await__\\|async.*await\\|_async\" /workspac",
+   "obs_hash": "bd1a540c8cdb"
+  },
+  {
+   "a": "read",
+   "kind": "post_view",
+   "file": "/workspace/amoffat__sh-744/tests/sh_test.py",
+   "action_repr": "read:/workspace/amoffat__sh-744/tests/sh_test.py",
+   "obs_hash": "a62a1a23097e"
+  },
+  {
+   "a": "read",
+   "kind": "post_view",
+   "file": "/workspace/amoffat__sh-744/sh.py",
+   "action_repr": "read:/workspace/amoffat__sh-744/sh.py",
+   "obs_hash": "660bded89f95"
+  },
+  {
+   "a": "task_tracking",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "task_tracking:plan",
+   "obs_hash": "eff3ae61e5e5"
+  },
+  {
+   "a": "run",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "run:cd /workspace/amoffat__sh-744 && python -m pytest tests/sh_test.py -x -q --t",
+   "obs_hash": "abcb4999edb5"
+  },
+  {
+   "a": "run",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "run:cd /workspace/amoffat__sh-744 && pip install pytest pytest-timeout 2>&1 | ta",
+   "obs_hash": "bbe4b2ff5ab3"
+  },
+  {
+   "a": "run",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "run:cd /workspace/amoffat__sh-744 && python -m pytest tests/sh_test.py -x -q --t",
+   "obs_hash": "a129ca878ee6"
+  },
+  {
+   "a": "task_tracking",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "task_tracking:plan",
+   "obs_hash": "eff3ae61e5e5"
+  },
+  {
+   "a": "think",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "think:",
+   "obs_hash": "25e7b5d6ee45"
+  },
+  {
+   "a": "task_tracking",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "task_tracking:plan",
+   "obs_hash": "eff3ae61e5e5"
+  },
+  {
+   "a": "edit",
+   "kind": "post_edit",
+   "file": "/workspace/amoffat__sh-744/sh.py",
+   "action_repr": "edit:/workspace/amoffat__sh-744/sh.py",
+   "obs_hash": "6c1e7a6227b2"
+  },
+  {
+   "a": "run",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "run:cd /workspace/amoffat__sh-744 && python -m pytest tests/sh_test.py -x -q --t",
+   "obs_hash": "77e01cd5c2f1"
+  },
+  {
+   "a": "run",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "run:grep -n \"aio_output_complete\" /workspace/amoffat__sh-744/sh.py",
+   "obs_hash": "ae092c8ba966"
+  },
+  {
+   "a": "read",
+   "kind": "post_view",
+   "file": "/workspace/amoffat__sh-744/sh.py",
+   "action_repr": "read:/workspace/amoffat__sh-744/sh.py",
+   "obs_hash": "d099d07a715e"
+  },
+  {
+   "a": "edit",
+   "kind": "post_edit",
+   "file": "/workspace/amoffat__sh-744/sh.py",
+   "action_repr": "edit:/workspace/amoffat__sh-744/sh.py",
+   "obs_hash": "99fe01b83aa4"
+  },
+  {
+   "a": "run",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "run:cd /workspace/amoffat__sh-744 && python -m pytest tests/sh_test.py -x -q --t",
+   "obs_hash": "988795a69cce"
+  },
+  {
+   "a": "run",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "run:cd /workspace/amoffat__sh-744 && python -m pytest tests/sh_test.py -x -q --t",
+   "obs_hash": "940d443519dc"
+  },
+  {
+   "a": "run",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "run:cd /workspace/amoffat__sh-744 && git stash && python -m pytest tests/sh_test",
+   "obs_hash": "099923aff524"
+  },
+  {
+   "a": "run",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "run:cd /workspace/amoffat__sh-744 && python -m pytest tests/sh_test.py -q --time",
+   "obs_hash": "cb60ab199934"
+  },
+  {
+   "a": "run",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "run:cd /workspace/amoffat__sh-744 && python -m pytest tests/sh_test.py -v -q --t",
+   "obs_hash": "0bc67b91cedd"
+  },
+  {
+   "a": "run",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "run:cd /workspace/amoffat__sh-744 && python -c \"\nimport asyncio\nimport sh\n\n# Tes",
+   "obs_hash": "48eef713a8a2"
+  },
+  {
+   "a": "run",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "run:cd /workspace/amoffat__sh-744 && python -c \"\nimport asyncio\nimport sh\n\n# Tes",
+   "obs_hash": "58d5007a04ce"
+  },
+  {
+   "a": "run",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "run:gt_validate unknown",
+   "obs_hash": "b6d36736918a"
+  },
+  {
+   "a": "run",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "run:gt_validate unknown",
+   "obs_hash": "b6d36736918a"
+  },
+  {
+   "a": "run",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "run:chmod +x /tmp/gt_tools/gt_validate/bin/gt_validate 2>/dev/null; gt_validate ",
+   "obs_hash": "7966a8dc3f7c"
+  },
+  {
+   "a": "task_tracking",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "task_tracking:plan",
+   "obs_hash": "eff3ae61e5e5"
+  },
+  {
+   "a": "read",
+   "kind": "post_view",
+   "file": "/workspace/amoffat__sh-744/sh.py",
+   "action_repr": "read:/workspace/amoffat__sh-744/sh.py",
+   "obs_hash": "184a93815ff0"
+  },
+  {
+   "a": "finish",
+   "kind": "skip",
+   "file": null,
+   "action_repr": "finish:",
+   "obs_hash": ""
+  }
+ ]
+}
