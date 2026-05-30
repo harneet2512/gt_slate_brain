@@ -26,7 +26,18 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-_DIAG_LEAK = re.compile(r"\[GT_[A-Z]+\]")
+# Hidden, stderr-only diagnostics that must never reach the agent. NOTE: this is an
+# explicit ALLOWLIST-of-drops, not a blanket ``\[GT_[A-Z]+\]`` — that blanket form
+# also ate legitimate agent-facing CONTENT markers (``[GT_VERIFY]`` from L6 pre-submit,
+# ``[GT_ADVISORY]`` from L5), silently deleting real layer output once append/prepend
+# became Brain-gated. Only the diagnostics below are leaks; GT_VERIFY / GT_ADVISORY are
+# content and pass.
+_HIDDEN_DIAG = (
+    "GT_META", "GT_STATUS", "GT_CONFIG", "GT_TRACE", "GT_DELIVERY", "GT_COST",
+    "GT_PAYLOAD", "GT_LLM_CONFIG", "GT_SUMMARY", "GT_BRIEF_DIAG", "GT_RANK_DIAG",
+    "GT_BRIEF_FAILED", "GT_BRIEF_TRACEBACK",
+)
+_DIAG_LEAK = re.compile(r"\[(?:" + "|".join(_HIDDEN_DIAG) + r")\]")
 _TAG_OPEN = re.compile(r"<gt-evidence\b")
 _SELF_CLOSING = re.compile(r"<gt-evidence\b[^>]*/>")
 _TAG_WITH_BODY = re.compile(r"<gt-evidence\b[^>]*>(.*?)</gt-evidence>", re.S)

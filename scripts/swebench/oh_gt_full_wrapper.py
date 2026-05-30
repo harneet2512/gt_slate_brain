@@ -842,7 +842,7 @@ def _maybe_fire_l5(
         )
         _log_gt_interaction(config, "L5", f"non_source:{path}", "redirect", advisory,
             agent_action_before=act_text[:300], event_id=_l5_ns_eid or "")
-        obs = append_observation(obs, "\n\n" + advisory + "\n")
+        obs = append_observation(obs, "\n\n" + advisory + "\n", layer="l5", config=config)
         if tel_obj is not None:
             tel_obj.record_gate(True)
             _write_gt_telemetry(instance_ref, tel_obj)
@@ -921,7 +921,7 @@ def _maybe_fire_presubmit_verify(config: GTRuntimeConfig, obs: Any, orig_run_act
         f"({len(config._presubmit_edited_files)} edited) — run before finishing:\n"
         + "\n".join(tests[:8])
     )
-    obs = append_observation(obs, "\n" + text)
+    obs = append_observation(obs, "\n" + text, layer="l6", config=config)
     _emit_structured_event(config, "L6", "presubmit_verify", rendered_text=text)
     print(f"[GT_DELIVERY] presubmit_verify: tests={len(tests)} edited={len(config._presubmit_edited_files)}", flush=True)
     return obs
@@ -1093,7 +1093,7 @@ def _brain_handle_suppress(
             if _wd.fire:
                 _wnote = _brain_wandering_note(_wd.scope)
                 if _wnote:
-                    obs = append_observation(obs, _wnote)  # routes through verify_block
+                    obs = append_observation(obs, _wnote, layer="wandering", config=config)
                     config._brain_wandering_fired = True
                     print(
                         f"[GT_META] BRAIN_WANDERING scope={list(_wd.scope)[:5]} "
@@ -1177,7 +1177,7 @@ def _brain_maybe_fire_proactive(
             if bd.fire:
                 note = _brain_bundle_note(bd.callers, bd.tests)
                 if note:
-                    obs = append_observation(obs, note)  # routes through verify_block
+                    obs = append_observation(obs, note, layer="bundle", config=config)
                     config._brain_proactive_fired = True
                     print(
                         f"[GT_META] BRAIN_BUNDLE callers={list(bd.callers)[:5]} "
@@ -1190,7 +1190,7 @@ def _brain_maybe_fire_proactive(
             if cd.fire:
                 note = _brain_completeness_note(cd.uncovered_scope, cd.co_change)
                 if note:
-                    obs = append_observation(obs, note)
+                    obs = append_observation(obs, note, layer="completeness", config=config)
                     config._brain_completeness_fired = True
                     print(
                         f"[GT_META] BRAIN_COMPLETENESS scope={list(cd.uncovered_scope)[:5]} "
@@ -2235,7 +2235,7 @@ def _check_pending_next_actions(config: GTRuntimeConfig, current_action_file: st
                             parent_event_id=l5_eid, rendered_text=msg,
                             next_action_type=nat, next_action_file=naf,
                         )
-                        obs = append_observation(obs, f"\n\n{msg}\n")
+                        obs = append_observation(obs, f"\n\n{msg}\n", layer="l5b", config=config)
                         config._l5b_injection_count = getattr(config, "_l5b_injection_count", 0) + 1
                         if naf:
                             if not hasattr(config, "_l5b_suggested_files"):
@@ -3823,7 +3823,7 @@ def wrap_runtime_run_action(runtime: Any, config: GTRuntimeConfig | None = None)
                                 next_action_file=_l5d.next_action_file,
                                 next_action_test=_l5d.next_action_test,
                             )
-                            obs = append_observation(obs, f"\n\n{_l5d.message}\n")
+                            obs = append_observation(obs, f"\n\n{_l5d.message}\n", layer="l5b", config=config)
                             _log_gt_interaction(
                                 config, "L5", "governor_cmd", "advisory", _l5d.message,
                                 agent_action_before=act_text[:300],
@@ -3867,7 +3867,7 @@ def wrap_runtime_run_action(runtime: Any, config: GTRuntimeConfig | None = None)
                                 next_action_type=_goku_d.next_action_type,
                                 next_action_file=_goku_d.next_action_file,
                             )
-                            obs = append_observation(obs, f"\n\n{_goku_d.message}\n")
+                            obs = append_observation(obs, f"\n\n{_goku_d.message}\n", layer="l6", config=config)
                             _log_gt_interaction(
                                 config, "L5", "goku_cmd", "advisory", _goku_d.message,
                                 agent_action_before=act_text[:300],
@@ -3911,7 +3911,7 @@ def wrap_runtime_run_action(runtime: Any, config: GTRuntimeConfig | None = None)
                             if _eg.center and len(_eg.callers) > 0:
                                 _ego_text = _eg.render(max_tokens=150)
                                 _grep_evidence = f"\n[GT] {_grep_sym}:\n{_ego_text}"
-                                obs = append_observation(obs, _grep_evidence)
+                                obs = append_observation(obs, _grep_evidence, layer="grep", config=config)
                                 config._grep_intercept_count += 1
                                 print(f"[GT_DELIVERY] grep_intercept_ego: symbol={_grep_sym} callers={len(_eg.callers)} fire={config._grep_intercept_count}", flush=True)
                                 # Skip flat caller path below
@@ -3972,7 +3972,7 @@ def wrap_runtime_run_action(runtime: Any, config: GTRuntimeConfig | None = None)
                                             _caller_line_parts.append(f"  {c['file_path']}:{c['source_line']}")
                                 _caller_lines = "\n".join(_caller_line_parts)
                                 _grep_evidence = f"\n[GT] Callers of '{_grep_sym}':\n{_caller_lines}"
-                                obs = append_observation(obs, _grep_evidence)
+                                obs = append_observation(obs, _grep_evidence, layer="grep", config=config)
                                 config._grep_intercept_count += 1
                                 print(
                                     f"[GT_DELIVERY] grep_intercept: symbol={_grep_sym} "
@@ -4011,7 +4011,7 @@ def wrap_runtime_run_action(runtime: Any, config: GTRuntimeConfig | None = None)
                                     _caller_line_parts_cq.append(f"  {_fp}:{_sl}")
                             _caller_lines_cq = "\n".join(_caller_line_parts_cq)
                             _grep_evidence = f"\n[GT] Callers of '{_grep_sym}':\n{_caller_lines_cq}"
-                            obs = append_observation(obs, _grep_evidence)
+                            obs = append_observation(obs, _grep_evidence, layer="grep", config=config)
                             config._grep_intercept_count += 1
                             print(
                                 f"[GT_DELIVERY] grep_intercept(container): symbol={_grep_sym} "
@@ -4051,7 +4051,7 @@ def wrap_runtime_run_action(runtime: Any, config: GTRuntimeConfig | None = None)
                     config._rescue_last_action = config.action_count
                     config._last_gt_action = config.action_count
                     _rescue_decision = "emit"
-                    obs = append_observation(obs, f"\n{_rescue_msg}")
+                    obs = append_observation(obs, f"\n{_rescue_msg}", layer="rescue", config=config)
                     _log_gt_interaction(
                         config, "L5", f"rescue:{config.action_count}", "rescue",
                         _rescue_msg, agent_action_before=act_text[:300],
@@ -5112,7 +5112,7 @@ def wrap_runtime_run_action(runtime: Any, config: GTRuntimeConfig | None = None)
                     # built are already delivered by _maybe_fire_presubmit_verify()
                     # at the edit→review transition (same assertions-table query,
                     # target_node_id > 0). No double-delivery, no prescription.
-                    return append_observation(obs, f"\n\n{_formatted_pe}")
+                    return append_observation(obs, f"\n\n{_formatted_pe}", layer="prediction_error", config=config)
                 return obs
             # Budget caps removed — dedup is the sole gate.
             # Fire count still tracked for telemetry.
@@ -5560,7 +5560,7 @@ def wrap_runtime_run_action(runtime: Any, config: GTRuntimeConfig | None = None)
                                 emitted=False, suppressed=True,
                                 suppression_reason="finish_handler_dead_write",
                             )
-                            obs = append_observation(obs, f"\n\n{_l5d.message}\n")
+                            obs = append_observation(obs, f"\n\n{_l5d.message}\n", layer="l5b", config=config)
                             _log_gt_interaction(
                                 config, "L5", "governor_finish", "advisory", _l5d.message,
                                 agent_action_before=act_text[:300],
@@ -5602,7 +5602,7 @@ def wrap_runtime_run_action(runtime: Any, config: GTRuntimeConfig | None = None)
                             emitted=False, suppressed=True,
                             suppression_reason="finish_handler_dead_write",
                         )
-                        obs = append_observation(obs, f"\n\n{_goku_d.message}\n")
+                        obs = append_observation(obs, f"\n\n{_goku_d.message}\n", layer="l6", config=config)
                         _log_gt_interaction(
                             config, "L5", "goku_finish", "advisory", _goku_d.message,
                             agent_action_before=act_text[:300],

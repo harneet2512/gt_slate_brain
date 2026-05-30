@@ -33,6 +33,17 @@ def test_dedup_is_per_layer():
     assert a.deliver is True and b.deliver is True  # not a cross-layer dup
 
 
+def test_content_gt_markers_are_not_dropped_as_diagnostics():
+    # REGRESSION: the blanket \[GT_[A-Z]+\] leak filter ate legitimate agent-facing
+    # content markers ([GT_VERIFY] from L6 pre-submit, [GT_ADVISORY] from L5),
+    # silently deleting real layer output once append became Brain-gated.
+    assert decide_delivery("l6", "[GT_VERIFY] run these tests:\n  pytest x").deliver is True
+    assert decide_delivery("l5", "[GT_ADVISORY] 3 scaffolds, 0 source edits").deliver is True
+    # but the true hidden diagnostics still drop
+    assert decide_delivery("l3", "[GT_META] node_count=42").deliver is False
+    assert decide_delivery("l3", "[GT_STATUS] ok").deliver is False
+
+
 def test_no_seen_set_means_no_dedup():
     # without a seen-set the same block delivers every time (safety still applies)
     t = "[SCOPE] one\n[SCOPE] two"
